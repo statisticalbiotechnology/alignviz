@@ -16,8 +16,9 @@ Every push to `main` builds a `linux/amd64` image and pushes it to
 Each build gets a unique UTC timestamp tag, e.g. `20260820-160621`, alongside
 `latest`; the exact tag to deploy is printed in the workflow run summary.
 
-The package needs to be public for Serve to pull it: repository → Packages →
-`alignviz` → Package settings → Change visibility → Public.
+Serve needs to be able to pull the package anonymously. Check under repository
+→ Packages → `alignviz` → Package settings that visibility is Public, and keep
+it that way — Serve re-fetches the image at regular intervals.
 
 To deploy or update the app, create/edit a Streamlit app at
 [serve.scilifelab.se](https://serve.scilifelab.se) with port `8501` and the
