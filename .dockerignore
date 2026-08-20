@@ -1,0 +1,7 @@
+.git
+.github
+**/*.ipynb
+**/.ipynb_checkpoints
+**/__pycache__
+LICENSE
+README.md
