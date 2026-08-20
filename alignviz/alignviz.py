@@ -46,6 +46,14 @@ LEFT: Move = (0, -1)
 
 MOVE_NAMES = {DIAG: "diagonal", UP: "up", LEFT: "left"}
 
+# Which corner of a cell each of the three competing values is written in,
+# as (right, down) multipliers away from the middle of the cell. A candidate
+# is placed towards the cell it comes from: the diagonal predecessor lies up
+# and to the left, so it goes in the top left corner. The other two would
+# both want the corner they point at, so the one from above takes the top
+# right corner and the one from the left the bottom left one.
+CANDIDATE_CORNERS: Dict[Move, Move] = {DIAG: (-1, -1), UP: (1, -1), LEFT: (-1, 1)}
+
 
 # --------------------------------------------------------------------------
 # Scoring
@@ -90,6 +98,8 @@ class Style:
     path_width: float = 3.2
     current_fill: str = "#fff3bf"  # cell being computed
     source_fill: str = "#dbe9ff"  # cells it is computed from
+    candidate_size: Optional[float] = None  # the competing values, in the
+    candidate_color: str = "#666666"  # corners of the cell being computed
     mark_fill: str = "#e8f7e8"  # user supplied highlights
     caption_size: float = 20.0
     caption_color: str = "#222222"
@@ -270,6 +280,7 @@ class Alignment:
         path: Optional[Sequence[Cell]] = None,
         current: Optional[Cell] = None,
         sources: bool = False,
+        candidates: bool = False,
         highlight: Optional[Iterable[Cell]] = None,
         caption: Optional[str] = None,
         style: Optional[Style] = None,
@@ -279,8 +290,11 @@ class Alignment:
 
         ``upto`` counts cells in ``self.order``; ``self.n_init`` therefore
         gives the freshly initialised matrix and ``None`` the finished one.
-        Set ``current`` to a cell to highlight it, and ``sources=True`` to
-        also shade the (up to) three cells the recursion reads from.
+        Set ``current`` to a cell to highlight it, ``sources=True`` to
+        also shade the (up to) three cells the recursion reads from, and
+        ``candidates=True`` to write the three competing values in the
+        corners of the current cell, each in the corner nearest the cell it
+        comes from.
         """
         style = style or Style()
         fmt = fmt or _fmt
@@ -305,6 +319,7 @@ class Alignment:
             trace=trace,
             path=list(path) if path else None,
             marks=marks,
+            candidate_cell=current if candidates else None,
             caption=caption,
             style=style,
             fmt=fmt,
@@ -314,6 +329,7 @@ class Alignment:
     def frames(
         self,
         sources: bool = True,
+        candidates: bool = False,
         traceback: bool = True,
         style: Optional[Style] = None,
         fmt=None,
@@ -338,6 +354,7 @@ class Alignment:
                     upto=self.n_init + k,
                     current=cell,
                     sources=sources,
+                    candidates=candidates,
                     caption=self.steps[cell].expression(fmt),
                     style=style,
                     fmt=fmt,
@@ -443,6 +460,7 @@ def _render(
     trace: bool,
     path: Optional[List[Cell]],
     marks: Dict[Cell, str],
+    candidate_cell: Optional[Cell],
     caption: Optional[str],
     style: Style,
     fmt,
@@ -503,6 +521,23 @@ def _render(
         out.append(
             _text(cx(j), cy(i), fmt(aln.S[i][j]), style.value_size, style.text_color)
         )
+
+    # The three competing values, in the corners of the cell being computed.
+    step = aln.steps.get(candidate_cell) if candidate_cell is not None else None
+    if step is not None:
+        size = style.candidate_size or style.value_size * 0.55
+        off = 0.30 * c
+        for mv, prev, inc in step.candidates:
+            sx, sy = CANDIDATE_CORNERS[mv]
+            out.append(
+                _text(
+                    cx(step.j) + sx * off,
+                    cy(step.i) + sy * off,
+                    fmt(prev + inc),
+                    size,
+                    style.candidate_color,
+                )
+            )
 
     # Red dashed arrows: which cell did the value come from?
     if trace:

@@ -53,6 +53,7 @@ with st.sidebar:
     show_trace = st.checkbox("Pointers (red)", True)
     show_path = st.checkbox("Traceback (blue)", True)
     show_sources = st.checkbox("Shade the three source cells", True)
+    show_candidates = st.checkbox("Competing values in the cell", True)
 
 if not seqA or not seqB:
     st.info("Give both sequences to get started.")
@@ -88,6 +89,7 @@ figure = aln.figure(
     path=aln.traceback() if (finished and show_path) else None,
     current=current,
     sources=show_sources,
+    candidates=show_candidates,
     style=style,
 )
 
