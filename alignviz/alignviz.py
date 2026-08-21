@@ -221,17 +221,31 @@ class Alignment:
         return self.S[self.start()[0]][self.start()[1]]
 
     def start(self) -> Cell:
-        """The cell the traceback starts from."""
+        """The cell the traceback starts from; the first of ``starts()``."""
+        return self.starts()[0]
+
+    def starts(self) -> List[Cell]:
+        """Every cell an optimal traceback may start from.
+
+        The bottom right corner for a global alignment, every cell holding
+        the best score for a local one, and every cell of the last row or
+        column that does for a semi-global one. There can be more than one,
+        which is one of the two ways several optimal alignments arise.
+        """
         if self.mode == "global":
-            return (self.m - 1, self.n - 1)
+            return [(self.m - 1, self.n - 1)]
         if self.mode == "local":
-            return max(
-                ((i, j) for i in range(self.m) for j in range(self.n)),
-                key=lambda c: self.S[c[0]][c[1]],
-            )
-        border = [(self.m - 1, j) for j in range(self.n)]
-        border += [(i, self.n - 1) for i in range(self.m)]
-        return max(border, key=lambda c: self.S[c[0]][c[1]])
+            cells = [(i, j) for i in range(self.m) for j in range(self.n)]
+        else:
+            cells = [(self.m - 1, j) for j in range(self.n)]
+            cells += [(i, self.n - 1) for i in range(self.m)]
+            cells = list(dict.fromkeys(cells))  # the corner is in both lists
+        best = max(self.S[i][j] for i, j in cells)
+        if self.mode == "local" and best <= 0:
+            # Nothing beats the empty alignment, so do not call every zero
+            # in the matrix a starting point.
+            return [max(cells, key=lambda c: self.S[c[0]][c[1]])]
+        return [c for c in cells if self.S[c[0]][c[1]] == best]
 
     def _stop(self, cell: Cell) -> bool:
         i, j = cell
@@ -258,6 +272,51 @@ class Alignment:
             path.append((i, j))
         return path
 
+    def tracebacks(
+        self, start: Optional[Cell] = None, limit: Optional[int] = None
+    ) -> List[List[Cell]]:
+        """Every optimal path, not just the first one.
+
+        Wherever a cell has several optimal predecessors the traceback
+        branches, and each branch spells out an alignment of its own. Pass
+        ``limit`` to stop after that many paths; ``count_tracebacks`` says
+        how many there are in total, which can be a very large number.
+        """
+        out: List[List[Cell]] = []
+
+        def walk(path: List[Cell]) -> None:
+            if limit is not None and len(out) >= limit:
+                return
+            cell = path[-1]
+            moves = self.trace.get(cell, [])
+            if self._stop(cell) or not moves:
+                out.append(path)
+                return
+            for di, dj in moves:
+                walk(path + [(cell[0] + di, cell[1] + dj)])
+                if limit is not None and len(out) >= limit:
+                    return
+
+        for cell in [start] if start else self.starts():
+            walk([cell])
+        return out
+
+    def count_tracebacks(self, start: Optional[Cell] = None) -> int:
+        """How many optimal paths there are, without enumerating them."""
+        memo: Dict[Cell, int] = {}
+
+        def count(cell: Cell) -> int:
+            moves = self.trace.get(cell, [])
+            if self._stop(cell) or not moves:
+                return 1
+            if cell not in memo:
+                memo[cell] = sum(
+                    count((cell[0] + di, cell[1] + dj)) for di, dj in moves
+                )
+            return memo[cell]
+
+        return sum(count(c) for c in ([start] if start else self.starts()))
+
     def aligned(self, path: Optional[List[Cell]] = None) -> Tuple[str, str]:
         """The two aligned sequences that a traceback path spells out."""
         path = path or self.traceback()
@@ -278,6 +337,8 @@ class Alignment:
         upto: Optional[int] = None,
         trace: bool = True,
         path: Optional[Sequence[Cell]] = None,
+        paths: Optional[Sequence[Sequence[Cell]]] = None,
+        visiting: Optional[Iterable[Cell]] = None,
         current: Optional[Cell] = None,
         sources: bool = False,
         candidates: bool = False,
@@ -295,6 +356,11 @@ class Alignment:
         ``candidates=True`` to write the three competing values in the
         corners of the current cell, each in the corner nearest the cell it
         comes from.
+
+        ``path`` draws one traceback and ``paths`` any number of them, with
+        the arrows shared by several paths drawn only once. Truncated paths
+        draw a traceback that is still under way; ``visiting`` then shades
+        the cells it has reached so far.
         """
         style = style or Style()
         fmt = fmt or _fmt
@@ -305,11 +371,17 @@ class Alignment:
         marks: Dict[Cell, str] = {}
         for cell in highlight or ():
             marks[cell] = style.mark_fill
+        drawn = [list(q) for q in paths] if paths else []
+        if path:
+            drawn.append(list(path))
+
         if current is not None and sources:
             i, j = current
             for di, dj in (DIAG, UP, LEFT):
                 if 0 <= i + di and 0 <= j + dj:
                     marks[(i + di, j + dj)] = style.source_fill
+        for cell in visiting or ():
+            marks[cell] = style.current_fill
         if current is not None:
             marks[current] = style.current_fill
 
@@ -317,7 +389,7 @@ class Alignment:
             self,
             shown=shown,
             trace=trace,
-            path=list(path) if path else None,
+            paths=drawn,
             marks=marks,
             candidate_cell=current if candidates else None,
             caption=caption,
@@ -458,7 +530,7 @@ def _render(
     aln: Alignment,
     shown: set,
     trace: bool,
-    path: Optional[List[Cell]],
+    paths: List[List[Cell]],
     marks: Dict[Cell, str],
     candidate_cell: Optional[Cell],
     caption: Optional[str],
@@ -546,10 +618,16 @@ def _render(
                 if (i + mv[0], j + mv[1]) in shown:
                     out.append(_trace_arrow(i, j, mv, cx, cy, c, style))
 
-    # Blue arrows: the optimal path, drawn backwards.
-    if path:
-        for (i, j), (pi, pj) in zip(path, path[1:]):
-            out.append(_path_arrow(i, j, (pi - i, pj - j), cx, cy, c, style))
+    # Blue arrows: the optimal paths, drawn backwards. Where several paths
+    # run through the same cells the arrow is only drawn once.
+    seen: set = set()
+    for p in paths:
+        for (i, j), (pi, pj) in zip(p, p[1:]):
+            move = (pi - i, pj - j)
+            if ((i, j), move) in seen:
+                continue
+            seen.add(((i, j), move))
+            out.append(_path_arrow(i, j, move, cx, cy, c, style))
 
     if caption:
         out.append(

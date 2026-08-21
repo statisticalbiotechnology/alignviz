@@ -26,6 +26,10 @@ def show_svg(svg: str) -> None:
         unsafe_allow_html=True,
     )
 
+# Enumerating every optimal path can run away on repetitive sequences, so
+# only this many are drawn and written out.
+MAX_PATHS = 12
+
 MODES = {
     "Global (Needleman-Wunsch)": "global",
     "Local (Smith-Waterman)": "local",
@@ -74,6 +78,26 @@ step = st.slider(
 )
 finished = step == n_steps
 
+# Once the matrix is complete the traceback can be followed, one move at a
+# time. There may be several optimal paths, and they need not be equally
+# long, so the second slider runs up to the longest one.
+paths = aln.tracebacks(limit=MAX_PATHS) if finished else []
+n_paths = aln.count_tracebacks() if finished else 0
+n_moves = max((len(p) - 1 for p in paths), default=0)
+back = n_moves
+if finished and n_moves:
+    back = st.slider(
+        "Traceback steps",
+        0,
+        n_moves,
+        n_moves,
+        help="Drag back to follow the traceback, one position of the "
+        "alignment at a time, from the end of the alignment towards its "
+        "start.",
+    )
+partial = [p[: back + 1] for p in paths]
+tracing = finished and back < n_moves
+
 current = None if finished else aln.fill_cells[step]
 caption = None
 if current is not None:
@@ -86,7 +110,8 @@ if current is not None:
 figure = aln.figure(
     upto=aln.n_init + step,
     trace=show_trace,
-    path=aln.traceback() if (finished and show_path) else None,
+    paths=partial if show_path else None,
+    visiting=[p[-1] for p in partial] if tracing else None,
     current=current,
     sources=show_sources,
     candidates=show_candidates,
@@ -102,14 +127,41 @@ with left:
 
 with right:
     st.metric("Score", f"{aln.score:g}")
-    outA, outB = aln.aligned()
-    st.markdown("**Optimal alignment**")
-    bars = "".join("|" if x == y and x != "-" else " " for x, y in zip(outA, outB))
-    st.code(f"{outA}\n{bars}\n{outB}", language=None)
-    if any(len(v) > 1 for v in aln.trace.values()):
+
+    # The alignment is not spelled out in advance: each move of the
+    # traceback adds one position to it, growing from the right, which is
+    # the direction the traceback itself runs in.
+    if not finished:
+        st.caption("Fill in the whole matrix to follow the traceback.")
+    elif back == 0:
         st.caption(
-            "Cells with more than one incoming arrow have several optimal "
-            "predecessors, so more than one optimal alignment exists."
+            "The traceback starts in the shaded cell. Drag the traceback "
+            "slider to build the alignment, one position at a time."
+        )
+    else:
+        st.markdown(
+            "**Optimal alignment**" if len(paths) == 1 else "**Optimal alignments**"
+        )
+        width = max(len(aln.aligned(p)[0]) for p in paths)
+        for done in partial:
+            outA, outB = aln.aligned(done)
+            bars = "".join(
+                "|" if x == y and x != "-" else " " for x, y in zip(outA, outB)
+            )
+            st.code(
+                "\n".join(line.rjust(width) for line in (outA, bars, outB)),
+                language=None,
+            )
+    if n_paths > len(paths):
+        st.caption(
+            f"{n_paths} optimal alignments in total; the first {len(paths)} "
+            "are traced."
+        )
+    elif n_paths > 1:
+        st.caption(
+            f"{n_paths} optimal alignments: cells with more than one incoming "
+            "arrow have several optimal predecessors, and the traceback "
+            "branches there."
         )
     st.download_button(
         "Download svg",
